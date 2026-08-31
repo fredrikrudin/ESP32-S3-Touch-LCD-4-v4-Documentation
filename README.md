@@ -86,6 +86,15 @@ Observe the log output in the Serial Monitor (configured to 115200 baud). Becaus
 *   **Stops at `[2/5]`:** Indicates a hardware failure or a short circuit on the I2C buses.
 *   **Stops at `[SD CARD]`:** Verify that your card is formatted to **FAT32** (exFAT is not supported) and ensure the expander chip at `0x20` is responsive (as it is responsible for pulling `SD_CS` low).
 
+## ⚙️ 4. Arduino IDE Environment Setup & Configuration
+1. Install the Espressif board package via Additional Boards Manager URLs and install version **v3.0.7**.
+2. Install required libraries: `ESP32_Display_Panel` (v0.1.8) and `ESP32_IO_Expander` (v0.0.4).
+3. Recommended Tools Menu settings:
+   * **Board:** `ESP32S3 Dev Module`
+   * **USB CDC On Boot:** `Enabled`
+   * **Flash Size:** `16MB (128Mb)`
+   * **PSRAM:** `OPI PSRAM`
+
 ### CAN or RS485 Communication Fails?
 There are two small red dual-switches located on the back of the PCB labeled **CAN** and **485**. These toggle the built-in **120-Ohm termination resistors**. If this board sits at the physical end of your bus wiring, these switches must be flipped to `ON` to prevent signal reflections.
 
