@@ -95,3 +95,6 @@ If the board ends up in a crash loop and is no longer detected as a valid COM po
 2. Press and release the **RESET** button quickly.
 3. Release the **BOOT** button.
 4. The board is now forced into *Download Mode* and will re-appear in the Arduino IDE, allowing you to flash a clean, working sketch.
+
+### WaveShare Wiki ###
+https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-4?srsltid=AfmBOorQe24zfo9qZ0bkl-78hbrpERO4lrStSTrBJWj-46-DTtiBlW1h
