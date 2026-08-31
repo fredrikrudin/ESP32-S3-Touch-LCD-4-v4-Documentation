@@ -95,6 +95,31 @@ Observe the log output in the Serial Monitor (configured to 115200 baud). Becaus
    * **Flash Size:** `16MB (128Mb)`
    * **PSRAM:** `OPI PSRAM`
 
+## 🖥️ 6. Serial Monitor Outputs & Diagnostics
+To view live terminal outputs, open the Arduino IDE Serial Monitor and configure the speed to **115200 baud**. The program feeds real-time interactive information to the terminal while running:
+
+### Real-Time Touch Coordinates
+When you touch the screen, it outputs the multi-touch finger indices and their precise physical pixel locations (within the 0–479 pixel space):
+```text
+[Touch Detekterad] Antal fingrar: 1
+  [Finger 0] -> Koordinater X: 124 | Y: 342
+```
+
+### Live CAN-Bus (TWAI) Packets
+Any incoming packet moving across the CAN terminals will be intercepted and displayed passively showing its unique identifier (ID), Data Length Code (DLC), and raw hex bytes:
+```text
+  [CAN In] ID: 0x1F4 | Längd: 8 | Data: DE AD BE EF 01 02 03 04 
+```
+
+### Live RS485 Data Streams
+Any character or industrial Modbus string entering the RS485 A/B terminals is filtered. Printable characters are rendered as text, while raw non-printable control signals are displayed as individual hex blocks:
+```text
+  [RS485 In] Hello_Master[0x01][0x03][0x00]
+```
+*Note: Every 5 seconds, the board also broadcasts an outbound transmission test echo string (`ESP32_Diagnostic_Pulse`) over the RS485 TX lane.*
+
+---
+
 ### CAN or RS485 Communication Fails?
 There are two small red dual-switches located on the back of the PCB labeled **CAN** and **485**. These toggle the built-in **120-Ohm termination resistors**. If this board sits at the physical end of your bus wiring, these switches must be flipped to `ON` to prevent signal reflections.
 
