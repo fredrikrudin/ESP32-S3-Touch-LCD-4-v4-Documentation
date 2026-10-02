@@ -1,134 +1,296 @@
-# 🛠️ Waveshare ESP32-S3-Touch-LCD-4 (v4) All-in-One Diagnostics & Troubleshooter
+# ⚠️ Findings, Errata & Open Questions
 
-![GitHub top language](https://shields.io)
-![Platform](https://shields.io)
-![Framework](https://shields.io)
+Companion to [README.md](README.md). The README documents **how the board is wired**.
+This file documents **what is easy to get wrong**, where the official sources are
+misleading, and which questions are still open.
 
-This repository contains a comprehensive diagnostics and troubleshooting application developed for the **Waveshare ESP32-S3-Touch-LCD-4 version v4**. Upon boot, the program performs a complete hardware inventory, emits an audible ready-beep, renders the results directly onto the built-in LCD screen, and saves a permanent troubleshooting log to an installed Micro SD card.
+Every item is marked with how well it is established:
 
----
-
-## 🏗️ 1. Hardware Architecture & I2C Mapping
-
-This module utilizes an advanced architecture where several critical peripheral components are placed behind an I2C IO-expander chip (`TCA9554PWR`) to conserve physical GPIO pins on the ESP32-S3 processor.
-
-### 📡 I2C Bus 0 (Internal System Bus)
-*   **Pins:** `SDA = GPIO 8`, `SCL = GPIO 9`
-*   **`0x20` – TCA9554PWR (IO-Expander):** Controls secondary hardware functions:
-    *   `EXIO1`: Backlight Enable (`BL_EN`)
-    *   `EXIO3`: SD Card Chip Select (`SD_CS`)
-    *   `EXIO5`: Built-in Buzzer Enable (`BEE_EN`)
-*   **`0x3C` – SW6106 (Smart Power Management):** Manages LiPo battery charging/discharging and battery level readings. *The software automatically prevents the chip from entering "Light Load Auto-Shutdown" via periodic register writes.*
-
-### 🖥️ I2C Bus 1 (Touch & Real-Time Clock)
-*   **Pins:** `SDA = GPIO 15`, `SCL = GPIO 7`
-*   **`0x5D` / `0x14` – GT911:** Capacitive touch controller supporting up to 5 simultaneous touch points.
-*   **`0x51` – PCF85063:** Hardware-based Real-Time Clock (RTC) for time tracking.
+| Mark | Meaning |
+| :--- | :--- |
+| ✅ **Verified** | Observed directly on this board, via `ESP32-S3-Touch-LCD-4_diags.ino` or a working build |
+| 📄 **Documented** | From the Waveshare wiki or library sources; not independently confirmed here |
+| ❓ **Open** | Sources disagree, or reconstructed from indirect evidence — do not trust blindly |
 
 ---
 
-## 🔌 2. Bus & Peripheral Configuration
+## 🔴 1. Open Questions — sources disagree
 
-| Interface | Control IC | ESP32-S3 Pins | Mode / Specification |
-| :--- | :--- | :--- | :--- |
-| **LCD Screen** | ST7701S | Dedicated RGB Interface | 480 × 480 px, 16-bit RGB (65K colors) |
-| **CAN-Bus (TWAI)** | TJA1051T | `TX = GPIO 6`, `RX = GPIO 0` | Listen-Only Mode, 500 kbps |
-| **RS485-Bus** | SP3485 | `TX = GPIO 44`, `RX = GPIO 43` | 115200 baud, 8N1 (Automatic direction) |
-| **Micro SD Card** | Built-in Slot | Hardware SPI (`MOSI:1`, `MISO:4`, `SCK:2`) | FAT32 format, CS controlled via Expander Pin 3 |
+These three are the most important entries in this file. Each one has two
+plausible answers in circulation, and picking the wrong one costs an evening.
+
+### 1.1 Which IO expander is actually fitted? ❓
+
+| Source | Claim |
+| :--- | :--- |
+| This repo's README, `ESP32-S3-Touch-LCD-4_diags.ino` | **TCA9554PWR** at `0x20`, driven over plain `Wire` |
+| `esp32-S3-ws4-boat` README | **CH32V003** IO expander, driven via the `WS_CH32_IO` library |
+| Waveshare's own repo README for "V4.0" | **CH32V003** at I2C address `0x24` |
+
+**What the hardware says:** the boot scan on this board finds `0x20` and `0x3C`
+on bus 0 and nothing at `0x24`. So on *this* unit the expander answering is at
+`0x20`.
+
+**Still to resolve:** whether `WS_CH32_IO` in the boat firmware is in fact
+talking to `0x20` (in which case the "CH32V003" naming there is inherited text
+and should be corrected), or whether Waveshare shipped more than one board under
+the "V4" label. The second possibility is real — Waveshare has reused revision
+labels before.
+
+> **Test:** add `Serial.printf` of the I2C address `WS_CH32_IO` uses, or scan bus 0
+> from the boat firmware and compare with the diags output. Five minutes, settles it.
+
+### 1.2 Is the backlight dimmable? ❓
+
+| Source | Claim |
+| :--- | :--- |
+| This repo's README | `EXIO1` = **Backlight Enable** — a digital on/off line |
+| `esp32-S3-ws4-boat` README | **PWM from the CH32V003, inverted** (`0` = full brightness, `255` = off) |
+
+These cannot both describe the same circuit. A TCA9554 output pin has no PWM
+capability, so if the expander is a TCA9554 the backlight is on/off only.
+
+> **Test:** set brightness to 50 % in the boat firmware and look at the screen.
+> If nothing changes, `EXIO1` is an enable line and any brightness slider in the
+> UI is decorative. Follows directly from 1.1.
+
+### 1.3 Micro SD — SPI or SDMMC? ❓
+
+| Source | Claim |
+| :--- | :--- |
+| This repo's README | Hardware **SPI**: `MOSI 1`, `MISO 4`, `SCK 2`, CS via `EXIO3` |
+| `esp32-S3-ws4-boat` README | **SDMMC 1-bit**: `CLK 2`, `CMD 1`, `DATA0 4` |
+
+Here both are probably correct. The same three pins carry both, because an SD
+slot wired for SDMMC 1-bit can also be driven in SPI mode — that is designed into
+the SD spec, not a hack.
+
+The practical differences:
+
+* **SDMMC 1-bit** is faster and has **no chip-select line**, so the `EXIO3` note
+  does not apply in that mode. This is the mode proven on hardware in the boat
+  firmware.
+* **SPI mode** needs `EXIO3` pulled low by the expander, which means the expander
+  must be alive before the card will mount. This is what the diags sketch uses.
+
+> Document whichever mode a given project uses. Mixing the two mental models is
+> how "card not found" bugs happen.
 
 ---
 
-## 💾 3. Log File Specification (`ESP32-S3-Touch-LCD-4.txt`)
+## 📐 2. Wiki Errata
 
-Upon a successful boot, a text file named `ESP32-S3-Touch-LCD-4.txt` is created on the root directory of the Micro SD card. The log file uses the following structure and can be used for offline analysis:
+### 2.1 The pin table implies GPIO 8/9 are shared with the RGB bus — they are not ✅
 
-```text
-=======================================================
-   WAVESHARE ESP32-S3-TOUCH-LCD-4 v4 TOTAL DIAGNOSTICS   
-=======================================================
-[1/5] WIRELESS INTERFACES:
-  Base MAC: 7C:DF:A1:XX:XX:XX   <- Unique hardware ID (eFuse)
-  BLE MAC:  7C:DF:A1:XX:XX:XY   <- Integrated Bluetooth 5.0 address
+The Waveshare wiki pin table lists:
 
-[2/5] SCANNING I2C BUS 0:
-  Found 0x20 -> TCA9554 Expander
-  Found 0x3C -> SW6106 Charger
-
-[2/5] SCANNING I2C BUS 1:
-  Found 0x51 -> PCF85063 RTC
-  Found 0x5D -> GT911 Touch     <- Confirms physical contact with the glass
-
-[3/5] POWER & BATTERY STATUS:
-  Battery connected: 84%        <- Shows capacity if a LiPo battery is used
-  Status: Charging...           <- Indicates if external voltage is fed via USB-C
-
-[4/5] CAN-BUS (TWAI) STATUS:
-  Active (Listen-Only, 500kbps)
-
-[5/5] RS485-BUS STATUS:
-  Active (115200 baud, 8N1)
-
-[SD CARD] STARTING WRITE:
-  -> SD card mounted OK!
-  -> Log file saved successfully!
+```
+GPIO8  |  R3  |  Expander_SDA
+GPIO9  |  G5  |  Expander_SCL
 ```
 
----
+Read literally, this says the expander's I2C bus shares two pins with the LCD's
+red and green data lines — which would mean the expander has to be configured
+*before* the RGB panel starts and becomes unreachable afterwards.
 
-## 🚨 4. Troubleshooting Guide
+**This is wrong, or at least not true of this board.** The boot scan finds the
+expander and the charger on bus 0 both before and after `ESP_Panel` brings the
+display up, and the SW6106 keep-alive keeps working for the lifetime of the
+sketch. GPIO 8 and 9 are dedicated I2C.
 
-> [!IMPORTANT]
-> **Critical Software Setting in Arduino IDE:**
-> Before flashing the code, navigate to `Tools` -> `USB CDC On Boot` and set it to **Enabled**. If left disabled, early runtime crashes can cause the ESP32-S3 to permanently shut down its USB peripheral, blocking future sketch uploads.
+Do not design an elaborate "configure then release the bus" sequence around this.
+It is unnecessary complexity solving a problem that does not exist.
 
-### Black Screen or Frozen System?
-Observe the log output in the Serial Monitor (configured to 115200 baud). Because the boot sequence is strictly divided into blocks `[1/5]` through `[5/5]`, you can instantly pinpoint where the processor hung:
-*   **Stops at `[2/5]`:** Indicates a hardware failure or a short circuit on the I2C buses.
-*   **Stops at `[SD CARD]`:** Verify that your card is formatted to **FAT32** (exFAT is not supported) and ensure the expander chip at `0x20` is responsive (as it is responsible for pulling `SD_CS` low).
+### 2.2 The wiki contradicts itself on which bus is which 📄
 
-## ⚙️ 5. Arduino IDE Environment Setup & Configuration
-1. Install the Espressif board package via Additional Boards Manager URLs and install version **v3.0.7**.
-2. Install required libraries: `ESP32_Display_Panel` (v0.1.8) and `ESP32_IO_Expander` (v0.0.4).
-3. Recommended Tools Menu settings:
-   * **Board:** `ESP32S3 Dev Module`
-   * **USB CDC On Boot:** `Enabled`
-   * **Flash Size:** `16MB (128Mb)`
-   * **PSRAM:** `OPI PSRAM`
+In one paragraph the wiki calls GPIO 8/9 "I2C1" and GPIO 15/7 "I2C0"; elsewhere
+it swaps them. The numbering is cosmetic — what matters is the pin pair and what
+answers on it. Trust the pin table and the scan, not the prose.
 
-## 🖥️ 6. Serial Monitor Outputs & Diagnostics
-To view live terminal outputs, open the Arduino IDE Serial Monitor and configure the speed to **115200 baud**. The program feeds real-time interactive information to the terminal while running:
+### 2.3 `ESP32_Display_Panel` does not list this board 📄
 
-### Real-Time Touch Coordinates
-When you touch the screen, it outputs the multi-touch finger indices and their precise physical pixel locations (within the 0–479 pixel space):
-```text
-[Touch Detekterad] Antal fingrar: 1
-  [Finger 0] -> Koordinater X: 124 | Y: 342
-```
-
-### Live CAN-Bus (TWAI) Packets
-Any incoming packet moving across the CAN terminals will be intercepted and displayed passively showing its unique identifier (ID), Data Length Code (DLC), and raw hex bytes:
-```text
-  [CAN In] ID: 0x1F4 | Längd: 8 | Data: DE AD BE EF 01 02 03 04 
-```
-
-### Live RS485 Data Streams
-Any character or industrial Modbus string entering the RS485 A/B terminals is filtered. Printable characters are rendered as text, while raw non-printable control signals are displayed as individual hex blocks:
-```text
-  [RS485 In] Hello_Master[0x01][0x03][0x00]
-```
-*Note: Every 5 seconds, the board also broadcasts an outbound transmission test echo string (`ESP32_Diagnostic_Pulse`) over the RS485 TX lane.*
+The library's supported-board list covers the ESP32-S3-Touch-LCD-4.3 and
+4.3B, but **not** the 4 (480×480). A custom board configuration is therefore
+mandatory, not optional. See §4.
 
 ---
 
-### CAN or RS485 Communication Fails?
-There are two small red dual-switches located on the back of the PCB labeled **CAN** and **485**. These toggle the built-in **120-Ohm termination resistors**. If this board sits at the physical end of your bus wiring, these switches must be flipped to `ON` to prevent signal reflections.
+## ⚡ 3. The SW6106 Will Switch Your Board Off ✅
 
-### Recovery from a Blocked USB Port (Bricked Board)
-If the board ends up in a crash loop and is no longer detected as a valid COM port by your computer:
-1. Press and hold the **BOOT** button on the back of the board.
-2. Press and release the **RESET** button quickly.
-3. Release the **BOOT** button.
-4. The board is now forced into *Download Mode* and will re-appear in the Arduino IDE, allowing you to flash a clean, working sketch.
+The single most confusing failure mode on this board.
 
-### WaveShare Wiki ###
-https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-4?srsltid=AfmBOorQe24zfo9qZ0bkl-78hbrpERO4lrStSTrBJWj-46-DTtiBlW1h
+The SW6106 power-management chip powers the board down when it detects a
+**light load**. An idle display showing a clock or a status page is exactly that.
+Running on the LiPo battery, the board appears to switch itself off for no reason,
+and it looks like a firmware crash.
+
+**Fix:** write `0x0A` to register `0x38` of device `0x3C` periodically. A 5-second
+interval is comfortable.
+
+```cpp
+// Cancels the light-load auto-shutdown timer. Call every ~5 s.
+Wire.beginTransmission(0x3C);
+Wire.write(0x38);
+Wire.write(0x0A);
+Wire.endTransmission();
+```
+
+Not needed on USB-C power, which is why the problem only shows up in the field.
+
+### Battery registers ❓
+
+These two are **reconstructed** from the diags log format, not from a datasheet.
+Verify before relying on them:
+
+| Register | Reported meaning |
+| :--- | :--- |
+| `0x31` | State of charge, 0–100 % |
+| `0x32` | Status bits — charging indicated by bit 6 / bit 7 |
+
+Readings of `0`, `0xFF` or anything above 100 should be treated as "no battery".
+
+---
+
+## 🧩 4. The `ESP_Panel` Configuration Trap ✅
+
+**Symptom:**
+
+```
+error: 'ESP_Panel' does not name a type; did you mean 'ESP_PanelLcd'?
+```
+
+**Cause:** the whole `ESP_Panel` class is wrapped in `#if ESP_PANEL_USE_BOARD`.
+With no configuration found, the library falls back to defaults where both board
+flags are `0`, that block compiles to nothing, and only the low-level classes
+survive — hence the compiler helpfully suggesting `ESP_PanelLcd`, which does exist.
+
+**Lookup order** for `ESP_Panel_Conf.h`:
+
+1. the sketch folder (next to the `.ino`) — highest priority, always wins
+2. `Arduino/libraries/`
+3. the `ESP32_Display_Panel` library's own root
+
+A config living in one project's sketch folder is invisible to every other
+project. That is the usual reason a second sketch fails to build while the first
+one still works.
+
+**Required contents:**
+
+```c
+#define ESP_PANEL_USE_CUSTOM_BOARD      1
+#define ESP_PANEL_USE_SUPPORTED_BOARD   0
+```
+
+plus `ESP_Panel_Board_Custom.h` beside it with the panel geometry and timings.
+
+**Fail loudly instead of cryptically** — put this above your panel code:
+
+```cpp
+#if !defined(ESP_PANEL_USE_BOARD) || !ESP_PANEL_USE_BOARD
+#error "ESP_Panel board configuration not found. Copy ESP_Panel_Conf.h and \
+ESP_Panel_Board_Custom.h into this sketch folder and set ESP_PANEL_USE_CUSTOM_BOARD to 1."
+#endif
+```
+
+### 🔺 Reproducibility gap
+
+`ESP_Panel_Conf.h` and `ESP_Panel_Board_Custom.h` currently live **outside every
+repository**, inside the Arduino libraries folder. A fresh Arduino install
+cannot reproduce any working build without them, and they contain the RGB timings
+that are hardest to recover by guesswork.
+
+**Committing a copy of both files to this repository is the single highest-value
+addition it could receive.**
+
+---
+
+## 🔧 5. Toolchain Caveats
+
+| Setting | Value | Why it matters |
+| :--- | :--- | :--- |
+| esp32 board package | **v3.0.7** | Newer cores break `ESP_Panel` 0.1.x |
+| `ESP32_Display_Panel` | **0.1.8** | 1.x renames everything (`esp_panel::board::Board`) |
+| `ESP32_IO_Expander` | **0.0.4** | Pinned alongside the above |
+| USB CDC On Boot | **Enabled** | Disabled + an early crash can block future uploads |
+| Erase All Flash Before Upload | **Disabled** | Otherwise every upload wipes saved settings |
+| PSRAM | **OPI PSRAM** | Framebuffer and LVGL buffers live there |
+| Flash Size | 16MB (128Mb) | |
+
+### LVGL
+
+* **LVGL 8.x only.** LVGL 9 removed `lv_meter`, which every gauge on this board uses.
+* `LV_COLOR_DEPTH 16`, `LV_COLOR_16_SWAP 0`.
+* Enable the Montserrat sizes you actually use (`14`, `20`, `28`, `32`, `48`);
+  missing sizes silently fall back to a smaller font.
+* Built-in Montserrat has **no å / ä / ö**. Keep UI strings ASCII unless you add
+  a custom font — this bites Swedish projects immediately.
+* Move LVGL's pool to PSRAM to free internal RAM:
+
+  ```c
+  #define LV_MEM_POOL_INCLUDE <esp32-hal-psram.h>
+  #define LV_MEM_POOL_ALLOC   ps_malloc
+  ```
+
+### Internal RAM
+
+With WiFi, Bluetooth and the display all running, free internal RAM is tight
+enough that **HTTPS will not fit**. Plain HTTP works. This is a memory
+constraint, not a configuration mistake — do not spend time on certificates.
+
+---
+
+## 📡 6. Peripheral Gotchas
+
+### GT911 touch address varies ✅
+
+The controller answers at **either `0x5D` or `0x14`**, and it differs between
+panels. Scan for both; never hardcode one. Worth noting which address *your*
+unit uses once you know it.
+
+### CAN / RS485 termination
+
+Two red DIP switches on the back of the PCB enable the built-in **120 Ω
+terminators**. Enable them only if this board sits at a physical *end* of the bus.
+
+> **NMEA 2000 specifically:** an N2K backbone is already terminated at both ends.
+> Switching the board's terminator on puts a third resistor across the bus and
+> degrades or kills communication. Leave it **off**.
+
+### PCF85063 RTC
+
+The oscillator-stopped flag is bit 7 of the seconds register (`0x04`). If it is
+set, the stored time is meaningless — treat it as "never set" rather than
+reading garbage into the system clock.
+
+---
+
+## 🩺 7. Symptom → Cause
+
+| Symptom | Likely cause |
+| :--- | :--- |
+| `'ESP_Panel' does not name a type` | `ESP_Panel_Conf.h` not reachable from this sketch — §4 |
+| Backlight on, screen black | RGB timings or ST7701 init in `ESP_Panel_Board_Custom.h` |
+| Board powers itself off on battery, fine on USB | SW6106 light-load shutdown — §3 |
+| Touch dead, display fine | GT911 on the other address (`0x14` vs `0x5D`) — §6 |
+| Settings lost after every upload | *Erase All Flash Before Sketch Upload* enabled |
+| Board no longer enumerates as a COM port | USB CDC crash loop — hold **BOOT**, tap **RESET**, release **BOOT** |
+| SD card not found | Wrong mode assumed (SPI vs SDMMC), exFAT instead of FAT32, or expander dead in SPI mode — §1.3 |
+| Time resets on every power cycle | RTC oscillator-stopped flag set, or no RTC fitted |
+| Swedish characters render as blanks | Montserrat has no å/ä/ö — §5 |
+| HTTPS request always fails | Not enough free internal RAM — use HTTP — §5 |
+
+---
+
+## 🧪 8. Suggested Next Additions
+
+Ordered by how much future time they save:
+
+1. **Commit `ESP_Panel_Conf.h` + `ESP_Panel_Board_Custom.h`** — closes the
+   reproducibility gap in §4.
+2. **Resolve §1.1 and §1.2** with the two five-minute tests described there, then
+   correct whichever README is wrong.
+3. **Record this unit's GT911 address** once observed.
+4. **A photo of the PCB back** showing the two termination switches and the
+   BOOT / RESET buttons.
+5. **Merge `BOARD_NOTES.md`** from `esp32-S3-ws4-boat` into this repo, so there is
+   one place to look rather than two.
